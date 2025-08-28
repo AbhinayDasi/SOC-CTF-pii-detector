@@ -3,30 +3,31 @@ import csv
 import json
 import re
 
-# ----------------------------
-# Regex patterns for standalone PII
-# ----------------------------
-PHONE_PATTERN = re.compile(r"^\d{10}$")
-AADHAR_PATTERN = re.compile(r"^\d{12}$")
-PASSPORT_PATTERN = re.compile(r"^[A-Z][0-9]{7}$", re.IGNORECASE)
-UPI_PATTERN = re.compile(r"^[\w\.\-]+@[a-z]{2,}$")
+# regex patterns to detect PII
+PHONE_PATTERN = re.compile(r"^\d{10}$")        # matches 10-digit phone numbers
+AADHAR_PATTERN = re.compile(r"^\d{12}$")       # matches 12-digit Aadhaar numbers
+PASSPORT_PATTERN = re.compile(r"^[A-Z][0-9]{7}$", re.IGNORECASE)  # simple passport pattern
+UPI_PATTERN = re.compile(r"^[\w\.\-]+@[a-z]{2,}$")  # simple UPI ID pattern
 
-# ----------------------------
-# Masking helpers
-# ----------------------------
+# helper functions to mask sensitive info
 def mask_phone(value):
+    # keep first 2 and last 2 digits, mask the middle
     return value[:2] + "XXXXXX" + value[-2:]
 
 def mask_aadhar(value):
+    # keep first 4 and last 4 digits, mask the middle
     return value[:4] + " XXXX XXXX " + value[-4:]
 
 def mask_passport(value):
+    # keep first letter, mask rest
     return value[0] + "XXXXXXX"
 
 def mask_upi(value):
+    # mask UPI user part, keep bank info
     return value[:2] + "XXX@upi"
 
 def mask_name(value):
+    # mask each word in the name, keep first letter
     parts = value.split()
     masked = []
     for p in parts:
@@ -37,6 +38,7 @@ def mask_name(value):
     return " ".join(masked)
 
 def mask_email(value):
+    # mask email username, keep domain
     try:
         user, domain = value.split("@")
         return user[:2] + "XXX@" + domain
@@ -44,19 +46,19 @@ def mask_email(value):
         return "[REDACTED_EMAIL]"
 
 def mask_address(value):
+    # redact full address
     return "[REDACTED_ADDRESS]"
 
 def mask_ip(value):
+    # redact IP address
     return "[REDACTED_IP]"
 
-# ----------------------------
-# Detect and redact PII in one record
-# ----------------------------
+# function to check and redact PII in a single record
 def process_record(record):
     is_pii = False
     redacted = {}
 
-    # Track combinatorial PII fields
+    # track potential combinatorial PII
     combo_flags = {
         "name": False,
         "email": False,
@@ -69,7 +71,7 @@ def process_record(record):
             redacted[key] = val
             continue
 
-        # --- Standalone PII ---
+        # check standalone PII fields
         if key == "phone" and PHONE_PATTERN.match(val):
             redacted[key] = mask_phone(val)
             is_pii = True
@@ -83,7 +85,7 @@ def process_record(record):
             redacted[key] = mask_upi(val)
             is_pii = True
 
-        # --- Combinatorial candidates ---
+        # check combinatorial fields
         elif key == "name" and len(val.split()) >= 2:
             combo_flags["name"] = True
             redacted[key] = mask_name(val)
@@ -99,20 +101,17 @@ def process_record(record):
         else:
             redacted[key] = val
 
-    # If at least 2 combinatorial fields → mark as PII
+    # if at least 2 combinatorial PII fields are present, mark as PII
     if sum(1 for v in combo_flags.values() if v) >= 2:
         is_pii = True
     else:
-        # Roll back masking if not enough fields
+        # if not enough, undo masking for combinatorial fields
         for k, flagged in combo_flags.items():
             if flagged:
                 redacted[k] = record[k]
 
     return redacted, is_pii
 
-# ----------------------------
-# Main program
-# ----------------------------
 def main():
     if len(sys.argv) != 2:
         print("Usage: python detector_abhinay_dasi.py iscp_pii_dataset_-_Sheet1.csv")
@@ -127,7 +126,6 @@ def main():
         reader = csv.reader(infile)
         header = next(reader)
 
-        # Ensure header matches expected format
         if header[0].lower().startswith("record_id"):
             fieldnames = ["record_id", "redacted_data_json", "is_pii"]
             writer = csv.DictWriter(outfile, fieldnames=fieldnames)
